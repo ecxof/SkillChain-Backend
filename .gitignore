@@ -1,0 +1,33 @@
+# Virtual environment
+venv/
+.venv/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Secrets and local configuration
+.env
+.env.local
+
+# Signing material — the attestation log's SSH key must never be committed
+*.pem
+id_ed25519*
+id_rsa*
+
+# Attestation log working copy (lives outside the repo in production)
+attestation-repo/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Editor and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

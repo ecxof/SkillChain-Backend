@@ -1,0 +1,8 @@
+# Normalise line endings to LF in the repository and working tree.
+# The attestation layer hashes canonical JSON byte-for-byte, so CRLF
+# creeping in on Windows would change content hashes between machines.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
