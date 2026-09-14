@@ -3,10 +3,10 @@ import httpx
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
 
 from db.database import get_db
 from models.user import User
+from schemas.auth import AuthUrlOut, OAuthCode, TokenOut, UserOut
 from services.auth_service import (
     create_access_token,
     get_current_user,
@@ -24,15 +24,9 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 
-# ── Schemas ────────────────────────────────────────────────────────────────────
-
-class OAuthCode(BaseModel):
-    code: str
-
-
 # ── Google ─────────────────────────────────────────────────────────────────────
 
-@router.get("/google/url")
+@router.get("/google/url", response_model=AuthUrlOut)
 def google_login_url():
     """Step 1: Frontend opens this URL to start Google login."""
     url = (
@@ -43,9 +37,9 @@ def google_login_url():
         f"&redirect_uri={FRONTEND_URL}/auth/google/callback"
         "&access_type=offline"
     )
-    return {"url": url}
+    return AuthUrlOut(url=url)
 
-@router.post("/google/callback")
+@router.post("/google/callback", response_model=TokenOut)
 async def google_callback(body: OAuthCode, db: Session = Depends(get_db)):
     """Step 2: Frontend sends the code it received from Google."""
     async with httpx.AsyncClient() as client:
@@ -71,12 +65,12 @@ async def google_callback(body: OAuthCode, db: Session = Depends(get_db)):
 
     user = get_or_create_user_google(google_user, db)
     token = create_access_token({"sub": user.id})
-    return {"access_token": token, "token_type": "bearer"}
+    return TokenOut(access_token=token)
 
 
 # ── GitHub ─────────────────────────────────────────────────────────────────────
 
-@router.get("/github/url")
+@router.get("/github/url", response_model=AuthUrlOut)
 def github_login_url():
     """Step 1: Frontend opens this URL to start GitHub login."""
     url = (
@@ -85,9 +79,9 @@ def github_login_url():
         "&scope=read:user user:email"
         f"&redirect_uri={FRONTEND_URL}/auth/github/callback"
     )
-    return {"url": url}
+    return AuthUrlOut(url=url)
 
-@router.post("/github/callback")
+@router.post("/github/callback", response_model=TokenOut)
 async def github_callback(body: OAuthCode, db: Session = Depends(get_db)):
     """Step 2: Frontend sends the code it received from GitHub."""
     async with httpx.AsyncClient() as client:
@@ -125,20 +119,12 @@ async def github_callback(body: OAuthCode, db: Session = Depends(get_db)):
 
     user = get_or_create_user_github(github_user, access_token, db)
     token = create_access_token({"sub": user.id})
-    return {"access_token": token, "token_type": "bearer"}
+    return TokenOut(access_token=token)
 
 
 # ── Me ─────────────────────────────────────────────────────────────────────────
 
-@router.get("/me")
+@router.get("/me", response_model=UserOut)
 def get_me(current_user: User = Depends(get_current_user)):
     """Returns the currently logged-in user's profile."""
-    return {
-        "id": current_user.id,
-        "email": current_user.email,
-        "display_name": current_user.display_name,
-        "avatar_url": current_user.avatar_url,
-        "github_linked": current_user.github_id is not None,
-        "google_linked": current_user.google_id is not None,
-        "created_at": current_user.created_at,
-    }
+    return UserOut.from_user(current_user)
