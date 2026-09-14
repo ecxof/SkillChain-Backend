@@ -1,12 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from db.database import Base, engine
 
 from models import user, project
 
 from routes import auth, projects, ai
-
-Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="SkillChain API", version="1.0.0")
 

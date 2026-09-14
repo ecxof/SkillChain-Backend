@@ -1,0 +1,46 @@
+# Local development database.
+#
+# Data lives in the named volume `skillchain_pgdata`, not in the container,
+# so it survives container restarts, rebuilds and `docker compose down`.
+# Only `docker compose down -v` (or `docker volume rm skillchain_pgdata`)
+# deletes it.
+#
+#   docker compose up -d        start the database in the background
+#   docker compose ps           check it reports "healthy"
+#   docker compose down         stop it; data is kept
+#
+# The API itself runs outside Docker for now and connects through
+# DATABASE_URL in .env. Hosted deployments point DATABASE_URL at a managed
+# PostgreSQL instance instead, with no code changes.
+
+name: skillchain
+
+services:
+  db:
+    # Major version pinned; PostgreSQL minor releases are bugfix and security
+    # only, and are data-directory compatible, so tracking them is safe.
+    image: postgres:18
+    container_name: skillchain-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-skillchain}
+    ports:
+      # Bound to loopback so the database is not reachable from the network.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # PostgreSQL 18+ images keep data under /var/lib/postgresql/18/docker and
+      # declare the volume at /var/lib/postgresql. Mounting the pre-18 path
+      # /var/lib/postgresql/data here would silently write to an anonymous
+      # volume and lose data when the container is recreated.
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
+    name: skillchain_pgdata
