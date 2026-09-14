@@ -26,7 +26,10 @@ httpx==0.28.1
 openai==3.13.0
 
 # --- Attestation timestamping (Bitcoin anchoring via OpenTimestamps) ---
-opentimestamps-client==0.7.2
+# The library rather than opentimestamps-client: the client's `ots` CLI
+# imports python-bitcoinlib's OpenSSL bindings, which fail to load on
+# Windows. Stamping and upgrading only need the library.
+opentimestamps==0.4.5
 
 # --- Tests ---
 pytest==9.1.1
