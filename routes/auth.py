@@ -4,8 +4,6 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from web3 import Web3
-from eth_account.messages import encode_defunct
 
 from db.database import get_db
 from models.user import User
@@ -30,11 +28,6 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 class OAuthCode(BaseModel):
     code: str
-
-class WalletLinkRequest(BaseModel):
-    wallet_address: str
-    signature: str
-    message: str
 
 
 # ── Google ─────────────────────────────────────────────────────────────────────
@@ -135,43 +128,6 @@ async def github_callback(body: OAuthCode, db: Session = Depends(get_db)):
     return {"access_token": token, "token_type": "bearer"}
 
 
-# ── Wallet ─────────────────────────────────────────────────────────────────────
-
-@router.get("/wallet/message/{wallet_address}")
-def get_wallet_message(wallet_address: str):
-    """Step 1: Frontend fetches this message to show MetaMask sign prompt."""
-    message = f"Link your wallet to SkillChain.\n\nWallet: {wallet_address}"
-    return {"message": message}
-
-@router.post("/wallet/link")
-def link_wallet(
-    body: WalletLinkRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Step 2: Frontend sends wallet address + the MetaMask signature."""
-    # Verify signature matches the wallet
-    try:
-        w3 = Web3()
-        encoded = encode_defunct(text=body.message)
-        recovered = w3.eth.account.recover_message(encoded, signature=body.signature)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid signature format")
-
-    if recovered.lower() != body.wallet_address.lower():
-        raise HTTPException(status_code=400, detail="Signature does not match wallet address")
-
-    # Make sure wallet isn't already on a different account
-    existing = db.query(User).filter(User.wallet_address == body.wallet_address).first()
-    if existing and existing.id != current_user.id:
-        raise HTTPException(status_code=409, detail="Wallet already linked to another account")
-
-    current_user.wallet_address = body.wallet_address
-    db.commit()
-    db.refresh(current_user)
-    return {"message": "Wallet linked successfully", "wallet_address": current_user.wallet_address}
-
-
 # ── Me ─────────────────────────────────────────────────────────────────────────
 
 @router.get("/me")
@@ -182,7 +138,6 @@ def get_me(current_user: User = Depends(get_current_user)):
         "email": current_user.email,
         "display_name": current_user.display_name,
         "avatar_url": current_user.avatar_url,
-        "wallet_address": current_user.wallet_address,
         "github_linked": current_user.github_id is not None,
         "google_linked": current_user.google_id is not None,
         "created_at": current_user.created_at,

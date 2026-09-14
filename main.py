@@ -2,9 +2,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from db.database import Base, engine
 
-from models import user, project, review, badge
+from models import user, project
 
-from routes import auth, projects, ai, reviews, badges
+from routes import auth, projects, ai
 
 Base.metadata.create_all(bind=engine)
 
@@ -21,8 +21,6 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/auth", tags=["Auth"])
 app.include_router(projects.router, prefix="/projects", tags=["Projects"])
 app.include_router(ai.router, prefix="/ai", tags=["AI"])
-app.include_router(reviews.router, prefix="/reviews", tags=["Reviews"])
-app.include_router(badges.router, prefix="/badges", tags=["Badges"])
 
 @app.get("/")
 def root():

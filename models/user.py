@@ -10,7 +10,6 @@ class User(Base):
     google_id = Column(String, unique=True, nullable=True)
     github_id = Column(String, unique=True, nullable=True)
     github_access_token = Column(String, nullable=True)
-    wallet_address = Column(String, unique=True, nullable=True)
     display_name = Column(String, nullable=True)
     avatar_url = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
