@@ -6,9 +6,9 @@ from alembic import context
 
 from db.database import DATABASE_URL, Base
 
-# Every model module must be imported here so its tables are registered on
-# Base.metadata; autogenerate cannot see tables it was never told about.
-from models import project, user  # noqa: F401
+# Importing the models package registers every table on Base.metadata;
+# autogenerate cannot see tables it was never told about.
+import models  # noqa: F401
 
 config = context.config
 
