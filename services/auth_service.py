@@ -80,11 +80,15 @@ def get_or_create_user_google(google_data: dict, db: Session) -> User:
 
 def get_or_create_user_github(github_data: dict, access_token: str, db: Session) -> User:
     github_id = str(github_data["id"])
+    # Kept current on every login: a user can rename their GitHub account,
+    # and the username is what repository URLs and public profiles show.
+    github_username = github_data.get("login")
 
     # Already has GitHub linked — update token
     user = db.query(User).filter(User.github_id == github_id).first()
     if user:
         user.github_access_token = access_token
+        user.github_username = github_username
         db.commit()
         db.refresh(user)
         return user
@@ -96,6 +100,7 @@ def get_or_create_user_github(github_data: dict, access_token: str, db: Session)
     if user:
         user.github_id = github_id
         user.github_access_token = access_token
+        user.github_username = github_username
         db.commit()
         db.refresh(user)
         return user
@@ -105,6 +110,7 @@ def get_or_create_user_github(github_data: dict, access_token: str, db: Session)
         id=str(uuid.uuid4()),
         email=email,
         github_id=github_id,
+        github_username=github_username,
         github_access_token=access_token,
         display_name=github_data.get("name") or github_data.get("login"),
         avatar_url=github_data.get("avatar_url"),

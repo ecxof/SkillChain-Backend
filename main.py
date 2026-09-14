@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from models import user, project
+import models  # noqa: F401  - registers every table on Base.metadata
 
 from routes import auth, projects, ai
 
