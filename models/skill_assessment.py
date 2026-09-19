@@ -32,7 +32,7 @@ class SkillAssessment(Base):
     level = Column(String, nullable=True)
     confidence = Column(Integer, nullable=True)
     reason = Column(Text, nullable=True)
-    # List of {type, file, start_line, end_line, detail, source}. Every span is
+    # List of evidence spans (schemas.reports.EvidenceSpan). Every file span is
     # checked against the snapshot's sampled file before it is stored, so a
     # citation always resolves to real lines.
     evidence = Column(JSON, nullable=False, default=list, server_default="[]")
