@@ -1,6 +1,6 @@
 # SkillChain — Project Log
 
-**Last updated:** 17 September 2026
+**Last updated:** 20 September 2026
 
 This file records what SkillChain is, how the design arrived at its current shape, what
 has actually been built, and what happens next. It is the document to read first when
@@ -12,13 +12,13 @@ returning to this project after a break.
 
 | | |
 |---|---|
-| **Phase** | Backend foundations complete; the analysis pipeline itself is not yet built |
-| **Branch** | `feature/api-request-response-schemas` (2 commits ahead of `main`, unmerged) |
-| **Merged so far** | 4 pull requests, 18 commits |
-| **Tests** | 68 passing (`pytest`, 0.22 s) |
+| **Phase** | Ingestion, authorship signals and AI analysis built; attestation not yet started |
+| **Branch** | `feature/span-evidence-ai-analysis` (unmerged) |
+| **Merged so far** | 6 pull requests, 23 commits |
+| **Tests** | 202 passing (`pytest`, 0.9 s) |
 | **Runtime** | Python 3.14.6 · FastAPI 0.136 · SQLAlchemy 2.0 · PostgreSQL 18 (Docker) · git 2.49 |
 | **Working endpoints** | Google + GitHub OAuth, `/auth/me`, health check |
-| **Not yet built** | GitHub ingestion, authorship signals, AI analysis, attestation, timestamping, public profiles |
+| **Not yet built** | Attestation, timestamping, pipeline orchestration, project and public routes |
 
 ---
 
@@ -120,8 +120,10 @@ contest by pointing at the same history — never presented as an "AI score".
 
 ### 2.6 GitHub access — both modes
 
-Authenticated via the user's stored token (5000 req/hr, private repos) when linked;
-unauthenticated public-only (60 req/hr) otherwise.
+Authenticated via the user's stored token (5000 req/hr) when linked; unauthenticated
+public-only (60 req/hr) otherwise. **Note:** the OAuth scope currently requested is
+`read:user user:email`, which does not grant repository contents, so private-repository
+analysis is not yet actually available — see §7.
 
 ### 2.7 AI provider — provider-agnostic, xAI default
 
@@ -183,14 +185,46 @@ entire Ethereum tree.
 - **GitHub username recorded at login**, needed later to compute the submitter's own commit
   share against contributor stats.
 
-### Current branch — `feature/api-request-response-schemas` (not yet merged)
+### PR #5 — `feature/api-request-response-schemas`
 
 - **Request and response schemas** — `schemas/auth.py`, `projects.py`, `reports.py`,
   `profiles.py` replace the empty `schemas/validators.py`, including GitHub URL validation
-  that parses owner/repo, and the `EvidenceSpan` shape. 197 lines of schema tests.
-- **Typed auth routes** — `routes/auth.py` now declares `response_model` on every endpoint,
+  that parses owner/repo, and the `EvidenceSpan` shape.
+- **Typed auth routes** — `routes/auth.py` declares `response_model` on every endpoint,
   with its inline Pydantic classes moved into `schemas/auth.py`, plus `pytest.ini`, a test
   `conftest.py` and 68 tests covering the auth routes and schemas.
+
+### PR #6 — `feature/github-ingestion-authorship-signals`
+
+- **`services/github_service.py` — repository ingestion.** One call fills every
+  `RepoSnapshot` column: metadata, languages, commit count from the `Link` header, recent
+  commit history, contributor statistics, README, file tree and a bounded sample of source
+  files, **all pinned to the head commit** so a run is reproducible and evidence line ranges
+  keep resolving. Manifests are sampled first, then the largest source files, skipping
+  dependencies, build output, lockfiles and generated code, within 15 files and 100 KB.
+  Contributor statistics are requested early and polled through their `202` warm-up; a
+  truncated tree is flagged rather than fatal. Typed errors for missing repositories,
+  exhausted rate limits, rejected tokens and empty repositories.
+- **`services/authorship_service.py` — deterministic signals.** Pure functions over a
+  stored snapshot, so the same snapshot always yields the same signals. Every report carries
+  the same five: `Co-authored-by` trailers and the coding agents they name, lines changed per
+  commit by week with the weeks that stand out, the period the recent commits cover and the
+  busiest hour within it, the submitter's commit share, and the generator starter the file
+  layout matches. A test asserts no observation reads as a verdict on AI use.
+
+### Current branch — `feature/span-evidence-ai-analysis` (not yet merged)
+
+- **`services/ai_service.py` rewritten behind an `LLMProvider` protocol**, with
+  `XAIProvider` as the default reading `XAI_API_KEY` and `AI_MODEL`. The client is built on
+  first use rather than at import, so the module loads without a key.
+- **`services/prompts.py`** holds the prompt behind `PROMPT_VERSION`, stored on every
+  report beside the model name. The README and sampled files are presented **line-numbered**,
+  and repository content is framed as material to assess rather than instructions to follow.
+- **Citations are verified, not trusted.** Every span is checked against the snapshot: the
+  file must be one the model was shown and the lines must exist in it. Failures are dropped
+  and one retry is spent telling the model what did not resolve; a skill with nothing left is
+  reported **unverified** with the reason saying so. The authorship signals are deliberately
+  kept out of the prompt, so a development pattern cannot colour a skill verdict.
 
 ### Also completed outside the PR sequence
 
@@ -219,9 +253,12 @@ entire Ethereum tree.
 | `routes/projects.py` | Stub — returns a placeholder message |
 | `routes/ai.py` | Stub — returns a placeholder message |
 | `services/auth_service.py` | **Complete** — JWT, `get_current_user`, get-or-create with account linking |
-| `services/ai_service.py` | Written but **unreachable** — no route calls it; needs the Phase F rewrite |
-| `services/github_service.py` | **Empty file** — next task |
-| `tests/` | `conftest.py`, `test_auth_routes.py`, `test_schemas.py` — 68 tests |
+| `services/github_service.py` | **Complete** — ingestion, sampling, typed errors |
+| `services/authorship_service.py` | **Complete** — the five deterministic signals |
+| `services/ai_service.py` | **Complete** — provider protocol, span validation, retry |
+| `services/prompts.py` | **Complete** — versioned prompt, line-numbered files |
+| `services/attestation_service.py` | **Does not exist yet** — next task |
+| `tests/` | 202 tests across auth, schemas, ingestion, authorship and analysis |
 | `docs/` | **Does not exist yet** — Phase K |
 
 ---
@@ -232,12 +269,12 @@ entire Ethereum tree.
 |---|---|---|
 | A | Environment, repo, dependencies, secrets, Alembic | ✅ Done |
 | B | Strip blockchain, badges, reviews | ✅ Done |
-| C | Pydantic schemas | ✅ Done (unmerged) |
+| C | Pydantic schemas | ✅ Done |
 | — | Analysis data model | ✅ Done |
-| **D** | **`github_service.py` — repo ingestion** | ⬅ **Next** |
-| E | `authorship_service.py` — deterministic signals | Pending |
-| F | `ai_service.py` rewrite — provider interface, span evidence | Pending |
-| G | `attestation_service.py` + `timestamp_service.py` | Pending |
+| D | `github_service.py` — repo ingestion | ✅ Done |
+| E | `authorship_service.py` — deterministic signals | ✅ Done |
+| F | `ai_service.py` rewrite — provider interface, span evidence | ✅ Done (unmerged) |
+| **G** | **`attestation_service.py` + `timestamp_service.py`** | ⬅ **Next** |
 | H | `analysis_service.py` + `profile_service.py` | Pending |
 | I | Routes — projects, reports, public | Pending |
 | J | Full test suite across the pipeline | Pending |
@@ -247,87 +284,64 @@ entire Ethereum tree.
 
 ## 6. What happens next, and how
 
-### Phase D — `services/github_service.py`
+### Phase G — `attestation_service.py` and `timestamp_service.py`
 
-An async httpx client that uses `User.github_access_token` when the user has linked GitHub,
-and falls back to unauthenticated requests otherwise.
+The two layers that let a third party verify a report without trusting SkillChain. Both sit
+behind `ATTESTATION_ENABLED` and `OTS_ENABLED`, which default to false, so local development
+and tests need no signing key and reach no network.
 
-**Calls to make:**
+**Canonical serialisation first.** `json.dumps(report, sort_keys=True, ensure_ascii=False,
+separators=(",", ":"))` encoded UTF-8 with a trailing LF. Re-serialising the same report must
+give identical bytes, because `content_hash = sha256(canonical_json)` is the report's
+address, and the repository's `.gitattributes` already forces LF so a Windows checkout cannot
+change the hash.
 
-| Endpoint | For |
-|---|---|
-| `GET /repos/{owner}/{repo}` | description, stars, forks, topics, default branch, private flag |
-| `GET /repos/{owner}/{repo}/languages` | language byte counts |
-| `GET /repos/{owner}/{repo}/commits?per_page=1` | total commit count, read from the `Link` header's `rel="last"` page number |
-| `GET /repos/{owner}/{repo}/commits?per_page=100` | commit metadata and messages for authorship signals |
-| `GET /repos/{owner}/{repo}/stats/contributors` | per-author weekly commit/addition/deletion counts in one call |
-| `GET /repos/{owner}/{repo}/readme` | README (base64) |
-| `GET /repos/{owner}/{repo}/git/trees/{sha}?recursive=1` | full file tree |
-| `GET /repos/{owner}/{repo}/contents/{path}` | contents of selected files |
+**The log.** Content-addressed, git-style sharded: `reports/<hash[:2]>/<hash>.json`. One
+signed commit per report, `git -c gpg.format=ssh -c user.signingkey=<key> commit -S`, whose
+SHA becomes the report's permanent public ID. Commits are serialised behind an application
+lock — single writer, append-only, never rebased, and a re-analysis appends rather than
+amends. `ATTESTATION_REMOTES` is pushed to best-effort, never blocking, so no single host can
+erase the log. The public key is served at `/.well-known/skillchain-signing-key` in
+`allowed_signers` format so anyone can run `git verify-commit` without contacting support.
 
-**Gotchas to handle:**
+**The timestamp.** The `opentimestamps` library submits the digest to public calendars via
+`RemoteCalendar` and writes a pending `.ots` proof immediately;
+`scripts/upgrade_timestamps.py` upgrades pending proofs once Bitcoin confirms, hours later,
+and commits the upgraded proofs in follow-up commits, which the append-only model
+accommodates naturally. Anchor checks compare the proof's Merkle root against a block header
+from a public source, since `bitcoin.rpc` does not load on Windows.
 
-- `stats/contributors` returns **`202 Accepted` with an empty body** while GitHub computes
-  the statistics. Retry with backoff; treat persistent 202 as "stats unavailable" rather
-  than failing the run.
-- The tree response can be `truncated: true` on very large repos — detect and degrade.
-- Rate limits differ by 83× between modes. Read `X-RateLimit-Remaining` and raise a typed
-  error rather than letting a 403 surface as a generic failure.
+**Nothing here may lose an analysis.** A git, network or calendar failure sets
+`attestation_status` or `timestamp_status` to `failed` and the report still saves and serves.
 
-**File-sampling heuristic:** always take manifests (`package.json`, `requirements.txt`,
-`pyproject.toml`, `go.mod`, `Cargo.toml`, `pom.xml`, `composer.json`, `Dockerfile`,
-`docker-compose.yml`, `*.tf`), then the largest source files by extension allowlist. Skip
-`node_modules/`, `vendor/`, `dist/`, `build/`, `.min.`, lockfiles and binaries. Cap at
-**15 files / 100 KB**.
+### Phase H — `analysis_service.py` and `profile_service.py`
 
-**Critical detail:** retain the full text of every sampled file in the snapshot. Evidence
-spans are line ranges, and they must stay renderable later without re-fetching from GitHub —
-the repo may have changed or been deleted.
-
-**Typed errors** for: repo not found (404), rate limited (403 with the reset time), private
-repo without a token, and truncated tree.
-
-### Phase E — `services/authorship_service.py`
-
-Pure functions over a stored snapshot. No LLM, no network, fully unit-testable against
-fixture histories:
-
-- `Co-authored-by:` trailer detection — Copilot and other coding agents announce themselves.
-- Commit size distribution — median and outliers.
-- Commit burst and velocity detection — an entire project in three commits in one hour.
-- The submitter's commit share, from contributor stats matched on `github_username`.
-- Scaffold detection from the file tree (`create-react-app`, `vite`, framework generators).
-
-Output is neutral and factual, with the numbers attached. **No score, no AI-probability, no
-accusatory phrasing.**
-
-### Phase F — `services/ai_service.py` rewrite
-
-An `LLMProvider` protocol with `XAIProvider` as the default, reading `XAI_API_KEY` and
-`AI_MODEL`. Prompts move to `services/prompts.py` behind an explicit `PROMPT_VERSION`
-constant, which is stored on every report.
-
-The prompt gains the file tree and **line-numbered** file contents, so the model can cite
-spans. The response schema requires each skill to carry `evidence` as
-`{file, start_line, end_line, detail}`.
-
-**Every span is validated against the stored snapshot.** A nonexistent file or an
-out-of-range line means reject and retry once; on a second failure the skill is marked
-unevidenced rather than shipping a hallucinated citation. This validation is what makes the
-explainability claim real rather than decorative.
+`run_pipeline(project_id)` orchestrates fetch → snapshot → authorship signals → analyse →
+persist → attest → complete, updating `Project.status` at each step and recording failures in
+`error_message` rather than raising into the submitting request. `POST /projects` returns 202
+and schedules it; the frontend polls. `profile_service` aggregates a user's completed reports
+into the public skill profile, honouring `profile_is_public`.
 
 ### Then
 
-**G** — canonical JSON, content hashing, locked append-only signed commits, multi-remote
-mirroring, OpenTimestamps stamping, and `scripts/upgrade_timestamps.py` to upgrade pending
-proofs once Bitcoin confirms. **H** — pipeline orchestration and profile aggregation.
-**I** — the project, report and public routes. **J** — pipeline tests. **K** — the `docs/`
+**I** — the project, report and public routes per §7 of the proposal, reusing the existing
+`get_current_user` dependency. **J** — end-to-end pipeline tests with a mocked GitHub and a
+stubbed provider, driving a real analysis into a temporary git repo and asserting the commit
+exists, is signed, and that the committed bytes hash to `content_hash`. **K** — the `docs/`
 set, including the use case, activity and class diagrams.
 
 ---
 
 ## 7. Open decisions
 
+- **The GitHub OAuth scope does not cover private repositories.** `routes/auth.py` requests
+  `read:user user:email`, so a linked token today buys only the higher rate limit. Either add
+  the `repo` scope (a broad grant the user must accept), register a GitHub App with read-only
+  contents permission (the proper route, more work), or state plainly that private-repository
+  analysis is deferred.
+- **Two auth tests depend on a local `.env`.** They pass only because a `SECRET_KEY` is
+  present; on a clean checkout they fail. `tests/conftest.py` should set a default key of at
+  least 32 bytes next to the `DATABASE_URL` default.
 - **`User.github_access_token` is stored in plaintext.** Encrypt at rest with a Fernet key,
   store only short-lived tokens, or accept and document it.
 - **Signing-key custody and rotation.** Rotation needs `allowed_signers` to retain old keys
