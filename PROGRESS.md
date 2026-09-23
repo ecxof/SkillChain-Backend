@@ -1,6 +1,6 @@
 # SkillChain — Project Log
 
-**Last updated:** 20 September 2026
+**Last updated:** 24 September 2026
 
 This file records what SkillChain is, how the design arrived at its current shape, what
 has actually been built, and what happens next. It is the document to read first when
@@ -12,13 +12,13 @@ returning to this project after a break.
 
 | | |
 |---|---|
-| **Phase** | Ingestion, authorship signals and AI analysis built; attestation not yet started |
-| **Branch** | `feature/span-evidence-ai-analysis` (unmerged) |
-| **Merged so far** | 6 pull requests, 23 commits |
-| **Tests** | 202 passing (`pytest`, 0.9 s) |
+| **Phase** | Every service the pipeline needs is built; nothing wires them together yet |
+| **Branch** | `feature/signed-attestation-log` (2 commits ahead of `main`, unmerged) |
+| **Merged so far** | 7 pull requests, 26 commits |
+| **Tests** | 244 passing (`pytest`, 8 s) |
 | **Runtime** | Python 3.14.6 · FastAPI 0.136 · SQLAlchemy 2.0 · PostgreSQL 18 (Docker) · git 2.49 |
 | **Working endpoints** | Google + GitHub OAuth, `/auth/me`, health check |
-| **Not yet built** | Attestation, timestamping, pipeline orchestration, project and public routes |
+| **Not yet built** | Pipeline orchestration, profile aggregation, project and public routes, `scripts/upgrade_timestamps.py` |
 
 ---
 
@@ -212,7 +212,7 @@ entire Ethereum tree.
   busiest hour within it, the submitter's commit share, and the generator starter the file
   layout matches. A test asserts no observation reads as a verdict on AI use.
 
-### Current branch — `feature/span-evidence-ai-analysis` (not yet merged)
+### PR #7 — `feature/span-evidence-ai-analysis`
 
 - **`services/ai_service.py` rewritten behind an `LLMProvider` protocol**, with
   `XAIProvider` as the default reading `XAI_API_KEY` and `AI_MODEL`. The client is built on
@@ -225,6 +225,36 @@ entire Ethereum tree.
   and one retry is spent telling the model what did not resolve; a skill with nothing left is
   reported **unverified** with the reason saying so. The authorship signals are deliberately
   kept out of the prompt, so a development pattern cannot colour a skill verdict.
+
+### Current branch — `feature/signed-attestation-log` (not yet merged)
+
+The two layers that let a third party check a report without trusting SkillChain. Both are
+off by default, so local development and tests need no signing key and reach no network.
+
+- **The signed log** (`services/attestation_service.py`). A report is serialised to canonical
+  JSON — sorted keys, no insignificant whitespace, UTF-8, one trailing newline, naive
+  timestamps normalised to UTC — addressed by the sha256 of those exact bytes, and committed
+  with an SSH signature. The commit SHA is the report's permanent public ID. Canonicalisation
+  is load-bearing: the same document must hash identically whichever database produced it and
+  whichever platform serialised it, so the log's own `.gitattributes` disables end-of-line
+  translation too. Appending is idempotent by content, so a retry cannot fork the log, while a
+  genuine re-analysis appends a second commit rather than amending the first. `from_env()`
+  refuses to build an *unsigned* log — an attestation nobody can verify is worse than an
+  honest failure. The published document carries no raw model response, token usage or email,
+  because the log is designed to be pushed to public mirrors.
+- **The Bitcoin anchor** (`services/timestamp_service.py`). Public OpenTimestamps calendars
+  aggregate digests into a Merkle tree and commit one root to Bitcoin: no wallet, no gas, no
+  contract, no RPC, no API key. `stamp()` returns a pending proof immediately and `upgrade()`
+  completes it hours later once Bitcoin confirms — which is why `timestamp_status` has both
+  states, and why nothing waits on Bitcoin. A random nonce is appended before submission so
+  calendar operators commit to a value they cannot correlate with a published report, and
+  upgrading only ever contacts a *configured* calendar, since the URI it would otherwise dial
+  comes out of a stored file.
+- Proofs are committed beside their reports in the same log, the upgrade appended rather than
+  overwriting the pending proof.
+- Tests include a real end-to-end signature: generate an ed25519 key, commit a report, and
+  verify it with `git verify-commit` against the published `allowed_signers` line — exactly
+  what a third party would run.
 
 ### Also completed outside the PR sequence
 
@@ -257,8 +287,12 @@ entire Ethereum tree.
 | `services/authorship_service.py` | **Complete** — the five deterministic signals |
 | `services/ai_service.py` | **Complete** — provider protocol, span validation, retry |
 | `services/prompts.py` | **Complete** — versioned prompt, line-numbered files |
-| `services/attestation_service.py` | **Does not exist yet** — next task |
-| `tests/` | 202 tests across auth, schemas, ingestion, authorship and analysis |
+| `services/attestation_service.py` | **Complete** — canonical JSON, signed append-only log, mirroring |
+| `services/timestamp_service.py` | **Complete** — OpenTimestamps stamping, upgrading, anchor reading |
+| `services/analysis_service.py` | **Does not exist yet** — next task |
+| `services/profile_service.py` | **Does not exist yet** — next task |
+| `scripts/upgrade_timestamps.py` | **Does not exist yet** — needs the pipeline to produce pending proofs first |
+| `tests/` | 244 tests across auth, schemas, ingestion, authorship, analysis, attestation and timestamping |
 | `docs/` | **Does not exist yet** — Phase K |
 
 ---
@@ -274,8 +308,8 @@ entire Ethereum tree.
 | D | `github_service.py` — repo ingestion | ✅ Done |
 | E | `authorship_service.py` — deterministic signals | ✅ Done |
 | F | `ai_service.py` rewrite — provider interface, span evidence | ✅ Done (unmerged) |
-| **G** | **`attestation_service.py` + `timestamp_service.py`** | ⬅ **Next** |
-| H | `analysis_service.py` + `profile_service.py` | Pending |
+| G | `attestation_service.py` + `timestamp_service.py` | ✅ Done (unmerged) |
+| **H** | **`analysis_service.py` + `profile_service.py`** | ⬅ **Next** |
 | I | Routes — projects, reports, public | Pending |
 | J | Full test suite across the pipeline | Pending |
 | K | `docs/` — proposal, architecture, UML diagrams, wireframes | Pending |
@@ -283,36 +317,6 @@ entire Ethereum tree.
 ---
 
 ## 6. What happens next, and how
-
-### Phase G — `attestation_service.py` and `timestamp_service.py`
-
-The two layers that let a third party verify a report without trusting SkillChain. Both sit
-behind `ATTESTATION_ENABLED` and `OTS_ENABLED`, which default to false, so local development
-and tests need no signing key and reach no network.
-
-**Canonical serialisation first.** `json.dumps(report, sort_keys=True, ensure_ascii=False,
-separators=(",", ":"))` encoded UTF-8 with a trailing LF. Re-serialising the same report must
-give identical bytes, because `content_hash = sha256(canonical_json)` is the report's
-address, and the repository's `.gitattributes` already forces LF so a Windows checkout cannot
-change the hash.
-
-**The log.** Content-addressed, git-style sharded: `reports/<hash[:2]>/<hash>.json`. One
-signed commit per report, `git -c gpg.format=ssh -c user.signingkey=<key> commit -S`, whose
-SHA becomes the report's permanent public ID. Commits are serialised behind an application
-lock — single writer, append-only, never rebased, and a re-analysis appends rather than
-amends. `ATTESTATION_REMOTES` is pushed to best-effort, never blocking, so no single host can
-erase the log. The public key is served at `/.well-known/skillchain-signing-key` in
-`allowed_signers` format so anyone can run `git verify-commit` without contacting support.
-
-**The timestamp.** The `opentimestamps` library submits the digest to public calendars via
-`RemoteCalendar` and writes a pending `.ots` proof immediately;
-`scripts/upgrade_timestamps.py` upgrades pending proofs once Bitcoin confirms, hours later,
-and commits the upgraded proofs in follow-up commits, which the append-only model
-accommodates naturally. Anchor checks compare the proof's Merkle root against a block header
-from a public source, since `bitcoin.rpc` does not load on Windows.
-
-**Nothing here may lose an analysis.** A git, network or calendar failure sets
-`attestation_status` or `timestamp_status` to `failed` and the report still saves and serves.
 
 ### Phase H — `analysis_service.py` and `profile_service.py`
 
