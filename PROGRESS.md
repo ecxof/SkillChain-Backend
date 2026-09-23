@@ -12,13 +12,13 @@ returning to this project after a break.
 
 | | |
 |---|---|
-| **Phase** | Every service the pipeline needs is built; nothing wires them together yet |
-| **Branch** | `feature/signed-attestation-log` (2 commits ahead of `main`, unmerged) |
+| **Phase** | The pipeline runs end to end; only the HTTP surface is missing |
+| **Branch** | `feature/signed-attestation-log` (5 commits ahead of `main`, unmerged) |
 | **Merged so far** | 7 pull requests, 26 commits |
-| **Tests** | 244 passing (`pytest`, 8 s) |
+| **Tests** | 285 passing (`pytest`, 15 s) |
 | **Runtime** | Python 3.14.6 · FastAPI 0.136 · SQLAlchemy 2.0 · PostgreSQL 18 (Docker) · git 2.49 |
 | **Working endpoints** | Google + GitHub OAuth, `/auth/me`, health check |
-| **Not yet built** | Pipeline orchestration, profile aggregation, project and public routes, `scripts/upgrade_timestamps.py` |
+| **Not yet built** | The project, report and public routes — everything behind them works |
 
 ---
 
@@ -256,6 +256,26 @@ off by default, so local development and tests need no signing key and reach no 
   verify it with `git verify-commit` against the published `allowed_signers` line — exactly
   what a third party would run.
 
+Then the pipeline that drives all of it:
+
+- **`services/analysis_service.py`.** `run_pipeline(project_id)` fetches the repository,
+  stores the snapshot, derives the authorship signals, asks the model, persists the verdicts,
+  and addresses and publishes the report — advancing `Project.status` through
+  `fetching → analyzing → attesting → completed` at each step. It runs as a background task,
+  so it owns its session and never raises into the request that started it. The layers fail
+  independently on purpose: an unfetchable repository or an unusable model response fails the
+  run, but failing to sign, mirror or timestamp does not, because the analysis has already
+  been paid for and is still worth serving. Unexpected exceptions are logged in full and
+  reported to the submitter as a generic message, since that text is shown to them.
+- **`services/profile_service.py`.** Aggregates completed reports into the public skill
+  profile, computed on read so no cached total can drift. Both gates must be open for
+  anything to appear — the user published their profile *and* the project is public — and a
+  re-analysed project counts once, as whatever its newest report says.
+- **`scripts/upgrade_timestamps.py`.** The scheduled job that completes pending Bitcoin
+  anchors. Everything stays retryable except the two cases that never will be: a report
+  marked pending with no proof in the log is marked failed, and an anchor that arrives but
+  cannot be committed stays pending rather than claiming a success nobody could verify.
+
 ### Also completed outside the PR sequence
 
 - **The hardcoded Google OAuth credentials are out of source.** `routes/auth.py` previously
@@ -289,10 +309,10 @@ off by default, so local development and tests need no signing key and reach no 
 | `services/prompts.py` | **Complete** — versioned prompt, line-numbered files |
 | `services/attestation_service.py` | **Complete** — canonical JSON, signed append-only log, mirroring |
 | `services/timestamp_service.py` | **Complete** — OpenTimestamps stamping, upgrading, anchor reading |
-| `services/analysis_service.py` | **Does not exist yet** — next task |
-| `services/profile_service.py` | **Does not exist yet** — next task |
-| `scripts/upgrade_timestamps.py` | **Does not exist yet** — needs the pipeline to produce pending proofs first |
-| `tests/` | 244 tests across auth, schemas, ingestion, authorship, analysis, attestation and timestamping |
+| `services/analysis_service.py` | **Complete** — `run_pipeline`, status transitions, failure capture |
+| `services/profile_service.py` | **Complete** — public skill aggregation, computed on read |
+| `scripts/upgrade_timestamps.py` | **Complete** — scheduled job completing pending Bitcoin anchors |
+| `tests/` | 285 tests across auth, schemas, ingestion, authorship, analysis, attestation, timestamping, the pipeline and profiles |
 | `docs/` | **Does not exist yet** — Phase K |
 
 ---
@@ -309,8 +329,8 @@ off by default, so local development and tests need no signing key and reach no 
 | E | `authorship_service.py` — deterministic signals | ✅ Done |
 | F | `ai_service.py` rewrite — provider interface, span evidence | ✅ Done (unmerged) |
 | G | `attestation_service.py` + `timestamp_service.py` | ✅ Done (unmerged) |
-| **H** | **`analysis_service.py` + `profile_service.py`** | ⬅ **Next** |
-| I | Routes — projects, reports, public | Pending |
+| H | `analysis_service.py` + `profile_service.py` | ✅ Done (unmerged) |
+| **I** | **Routes — projects, reports, public** | ⬅ **Next** |
 | J | Full test suite across the pipeline | Pending |
 | K | `docs/` — proposal, architecture, UML diagrams, wireframes | Pending |
 
@@ -318,18 +338,19 @@ off by default, so local development and tests need no signing key and reach no 
 
 ## 6. What happens next, and how
 
-### Phase H — `analysis_service.py` and `profile_service.py`
+### Phase I — the HTTP surface
 
-`run_pipeline(project_id)` orchestrates fetch → snapshot → authorship signals → analyse →
-persist → attest → complete, updating `Project.status` at each step and recording failures in
-`error_message` rather than raising into the submitting request. `POST /projects` returns 202
-and schedules it; the frontend polls. `profile_service` aggregates a user's completed reports
-into the public skill profile, honouring `profile_is_public`.
+The project, report and public routes per §7 of the proposal, reusing the existing
+`get_current_user` dependency. `POST /projects` validates the submission, creates the row
+and schedules `run_pipeline` as a background task, returning 202 immediately; the client
+polls `GET /projects/{id}` through the statuses. The public routes serve a profile and a
+report without authentication, honouring `profile_is_public` and each project's own
+visibility, and `/public/reports/{id}/attestation` hands over the canonical bytes, the
+commit SHA, the mirrors and the verify commands.
 
 ### Then
 
-**I** — the project, report and public routes per §7 of the proposal, reusing the existing
-`get_current_user` dependency. **J** — end-to-end pipeline tests with a mocked GitHub and a
+**J** — end-to-end pipeline tests with a mocked GitHub and a
 stubbed provider, driving a real analysis into a temporary git repo and asserting the commit
 exists, is signed, and that the committed bytes hash to `content_hash`. **K** — the `docs/`
 set, including the use case, activity and class diagrams.
