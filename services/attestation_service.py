@@ -101,6 +101,11 @@ def report_path(digest: str) -> str:
     return f"reports/{digest[:2]}/{digest}.json"
 
 
+def proof_path(digest: str) -> str:
+    """Where a report's OpenTimestamps proof lives, beside the report itself."""
+    return f"reports/{digest[:2]}/{digest}.ots"
+
+
 def _iso(value: datetime | None) -> str | None:
     """UTC ISO-8601, treating a naive datetime as UTC.
 
@@ -292,6 +297,34 @@ class AttestationLog:
             canonical_json=canonical, signed=bool(self.signing_key),
             attested_at=datetime.now(timezone.utc),
         )
+
+    def append_proof(self, digest: str, proof: bytes) -> str:
+        """Commit a report's OpenTimestamps proof and return the commit SHA.
+
+        Proofs arrive twice: pending at issue time, then upgraded hours later
+        once Bitcoin confirms. Both are ordinary commits, which is exactly what
+        an append-only log is for — the upgrade is recorded rather than
+        overwriting the evidence that the earlier, weaker proof existed.
+        """
+        relative = proof_path(digest)
+        absolute = self.repo_path / relative
+
+        with _WRITE_LOCK:
+            self.ensure_initialised()
+            if absolute.exists() and absolute.read_bytes() == proof:
+                existing = self._committed_sha(relative)
+                if existing:
+                    return existing
+
+            absolute.parent.mkdir(parents=True, exist_ok=True)
+            absolute.write_bytes(proof)
+            self._git("add", "--", relative)
+            commit_args = ["commit", "--quiet", "-m",
+                           f"Timestamp report {digest[:12]}\n\ncontent-hash: {digest}\n"]
+            if self.signing_key:
+                commit_args.insert(1, "-S")
+            self._git(*commit_args)
+            return self._git("rev-parse", "HEAD").stdout.strip()
 
     def push(self) -> list[str]:
         """Mirror the log to every configured remote, best effort.
