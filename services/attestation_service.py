@@ -326,6 +326,11 @@ class AttestationLog:
             self._git(*commit_args)
             return self._git("rev-parse", "HEAD").stdout.strip()
 
+    def read_proof(self, digest: str) -> bytes | None:
+        """A report's stored proof, or None if it was never stamped."""
+        stored = self.repo_path / proof_path(digest)
+        return stored.read_bytes() if stored.exists() else None
+
     def push(self) -> list[str]:
         """Mirror the log to every configured remote, best effort.
 
