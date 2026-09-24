@@ -79,11 +79,21 @@ def build_profile(user: User) -> PublicProfileOut:
 def latest_report(project: Project):
     """The newest report for a public, completed project, or None.
 
-    Re-analysis adds a report rather than replacing one, so a project with a
-    history still counts once, and it counts as whatever it says now.
+    The visibility gate belongs here rather than in :func:`newest_report`: an
+    owner looking at their own project must see its report whether or not they
+    have published it.
     """
     if project.visibility != "public" or project.status != "completed":
         return None
+    return newest_report(project)
+
+
+def newest_report(project: Project):
+    """The project's most recent report, ungated, or None if it has none.
+
+    Re-analysis adds a report rather than replacing one, so a project with a
+    history still counts once, and it counts as whatever it says now.
+    """
     reports = [
         snapshot.report for snapshot in project.snapshots if snapshot.report is not None
     ]
