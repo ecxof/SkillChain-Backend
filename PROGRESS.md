@@ -12,13 +12,13 @@ returning to this project after a break.
 
 | | |
 |---|---|
-| **Phase** | The pipeline runs end to end; only the HTTP surface is missing |
-| **Branch** | `feature/signed-attestation-log` (5 commits ahead of `main`, unmerged) |
-| **Merged so far** | 7 pull requests, 26 commits |
-| **Tests** | 285 passing (`pytest`, 15 s) |
+| **Phase** | The HTTP surface is complete and verified end to end; only the documents remain |
+| **Branch** | `main` — nothing outstanding |
+| **Merged so far** | 7 pull requests, plus the attestation and route work committed straight to `main` |
+| **Tests** | 344 passing (`pytest`, 17 s) |
 | **Runtime** | Python 3.14.6 · FastAPI 0.136 · SQLAlchemy 2.0 · PostgreSQL 18 (Docker) · git 2.49 |
-| **Working endpoints** | Google + GitHub OAuth, `/auth/me`, health check |
-| **Not yet built** | The project, report and public routes — everything behind them works |
+| **Working endpoints** | The whole API: OAuth and `/auth/me`, profile settings, the project routes, the public profile, report and attestation routes, and the well-known signing key |
+| **Not yet built** | The `docs/` set — proposal, requirements, architecture, UML diagrams, wireframes |
 
 ---
 
@@ -226,7 +226,7 @@ entire Ethereum tree.
   reported **unverified** with the reason saying so. The authorship signals are deliberately
   kept out of the prompt, so a development pattern cannot colour a skill verdict.
 
-### Current branch — `feature/signed-attestation-log` (not yet merged)
+### Merged into `main` — `feature/signed-attestation-log`
 
 The two layers that let a third party check a report without trusting SkillChain. Both are
 off by default, so local development and tests need no signing key and reach no network.
@@ -312,7 +312,7 @@ Then the pipeline that drives all of it:
 | `services/analysis_service.py` | **Complete** — `run_pipeline`, status transitions, failure capture |
 | `services/profile_service.py` | **Complete** — public skill aggregation, computed on read |
 | `scripts/upgrade_timestamps.py` | **Complete** — scheduled job completing pending Bitcoin anchors |
-| `tests/` | 340 tests across auth, schemas, ingestion, authorship, analysis, attestation, timestamping, the pipeline, profiles and every route |
+| `tests/` | 344 tests across auth, schemas, ingestion, authorship, analysis, attestation, timestamping, the pipeline, profiles and every route |
 | `docs/` | **Does not exist yet** — Phase K |
 
 ---
@@ -327,33 +327,49 @@ Then the pipeline that drives all of it:
 | — | Analysis data model | ✅ Done |
 | D | `github_service.py` — repo ingestion | ✅ Done |
 | E | `authorship_service.py` — deterministic signals | ✅ Done |
-| F | `ai_service.py` rewrite — provider interface, span evidence | ✅ Done (unmerged) |
-| G | `attestation_service.py` + `timestamp_service.py` | ✅ Done (unmerged) |
-| H | `analysis_service.py` + `profile_service.py` | ✅ Done (unmerged) |
-| **I** | **Routes — projects, reports, public** | ⬅ **Next** |
-| J | Full test suite across the pipeline | Pending |
-| K | `docs/` — proposal, architecture, UML diagrams, wireframes | Pending |
+| F | `ai_service.py` rewrite — provider interface, span evidence | ✅ Done |
+| G | `attestation_service.py` + `timestamp_service.py` | ✅ Done |
+| H | `analysis_service.py` + `profile_service.py` | ✅ Done |
+| I | Routes — projects, reports, public | ✅ Done |
+| J | Full test suite across the pipeline | ✅ Done |
+| **K** | **`docs/` — proposal, architecture, UML diagrams, wireframes** | ⬅ **Next** |
 
 ---
 
 ## 6. What happens next, and how
 
-### Phase I — the HTTP surface
+### Phase K — the documents
 
-The project, report and public routes per §7 of the proposal, reusing the existing
-`get_current_user` dependency. `POST /projects` validates the submission, creates the row
-and schedules `run_pipeline` as a background task, returning 202 immediately; the client
-polls `GET /projects/{id}` through the statuses. The public routes serve a profile and a
-report without authentication, honouring `profile_is_public` and each project's own
-visibility, and `/public/reports/{id}/attestation` hands over the canonical bytes, the
-commit SHA, the mirrors and the verify commands.
+The `docs/` set: the proposal, the requirements, the architecture and the authorship
+signals, with the use case, activity and class diagrams and the interface wireframes.
+Nothing in the codebase blocks it, and it is the last deliverable outstanding. It is
+large enough to want a branch of its own rather than landing piecemeal on `main`.
 
-### Then
+### What I and J turned out to be
 
-**J** — end-to-end pipeline tests with a mocked GitHub and a
-stubbed provider, driving a real analysis into a temporary git repo and asserting the commit
-exists, is signed, and that the committed bytes hash to `content_hash`. **K** — the `docs/`
-set, including the use case, activity and class diagrams.
+**I** — the HTTP surface. `POST /projects` returns 202 and schedules `run_pipeline`,
+committing the row first because the pipeline opens its own session; the client polls
+`GET /projects/{id}` through the statuses. Anything a caller does not own or may not see
+is reported as missing rather than forbidden, since 403 confirms an id exists. The public
+routes need no token, and `/public/reports/{id}/attestation` hands over the canonical
+bytes, the commit SHA, the mirrors and the verify commands.
+
+**J** — mostly already present, and narrower than this section used to claim. The
+pipeline tests had long driven real analyses into temporary git repositories; what was
+missing was the join between them. `tests/test_end_to_end.py` now walks a submission over
+HTTP, through the real pipeline, into a signed git repository, then reads the proof back
+from the public endpoints and checks it with `git verify-commit` against the key served at
+`/.well-known/skillchain-signing-key`. GitHub and the model are the only things stubbed,
+because they are the only things that would otherwise reach the network.
+
+One assertion was also circular: a committed report was checked for existence at
+`report_path(content_hash)`, a path built from the hash itself, which proved only that the
+path had been derived from the column. Both the pipeline tests and the walk now re-read the
+committed bytes and hash them.
+
+Deliberately not done: letting `github_service` run for real behind `respx` inside the
+pipeline. Its own tests already mock the full GitHub surface, and duplicating that surface
+into the walk would buy coverage of parsing that is tested a layer down.
 
 ---
 
@@ -364,9 +380,6 @@ set, including the use case, activity and class diagrams.
   the `repo` scope (a broad grant the user must accept), register a GitHub App with read-only
   contents permission (the proper route, more work), or state plainly that private-repository
   analysis is deferred.
-- **Two auth tests depend on a local `.env`.** They pass only because a `SECRET_KEY` is
-  present; on a clean checkout they fail. `tests/conftest.py` should set a default key of at
-  least 32 bytes next to the `DATABASE_URL` default.
 - **`User.github_access_token` is stored in plaintext.** Encrypt at rest with a Fernet key,
   store only short-lived tokens, or accept and document it.
 - **Signing-key custody and rotation.** Rotation needs `allowed_signers` to retain old keys
