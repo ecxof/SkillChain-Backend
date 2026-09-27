@@ -300,8 +300,8 @@ Then the pipeline that drives all of it:
 | `migrations/` | Alembic configured; baseline + pipeline migrations |
 | `schemas/` | `auth`, `projects`, `reports`, `profiles` — complete |
 | `routes/auth.py` | **Complete** — Google + GitHub OAuth, `/auth/me`, fully typed |
-| `routes/projects.py` | Stub — returns a placeholder message |
-| `routes/ai.py` | Stub — returns a placeholder message |
+| `routes/projects.py` | **Complete** — submit, list, read, delete, re-analyze, report |
+| `routes/public.py` | **Complete** — profiles, reports, attestation, no account needed |
 | `services/auth_service.py` | **Complete** — JWT, `get_current_user`, get-or-create with account linking |
 | `services/github_service.py` | **Complete** — ingestion, sampling, typed errors |
 | `services/authorship_service.py` | **Complete** — the five deterministic signals |
@@ -312,7 +312,7 @@ Then the pipeline that drives all of it:
 | `services/analysis_service.py` | **Complete** — `run_pipeline`, status transitions, failure capture |
 | `services/profile_service.py` | **Complete** — public skill aggregation, computed on read |
 | `scripts/upgrade_timestamps.py` | **Complete** — scheduled job completing pending Bitcoin anchors |
-| `tests/` | 285 tests across auth, schemas, ingestion, authorship, analysis, attestation, timestamping, the pipeline and profiles |
+| `tests/` | 340 tests across auth, schemas, ingestion, authorship, analysis, attestation, timestamping, the pipeline, profiles and every route |
 | `docs/` | **Does not exist yet** — Phase K |
 
 ---
