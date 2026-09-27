@@ -9,6 +9,7 @@ over HTTP and verified with git rather than with anything this suite owns.
 """
 
 import hashlib
+import json
 import os
 import subprocess
 from datetime import datetime, timezone
@@ -20,7 +21,7 @@ import pytest  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from services import analysis_service, attestation_service, timestamp_service  # noqa: E402
-from services.ai_service import AnalysisResult  # noqa: E402
+from services.ai_service import LLMResponse  # noqa: E402
 from services.attestation_service import AttestationLog  # noqa: E402
 
 HEAD = "a3f9c1b" + "0" * 33
@@ -41,20 +42,36 @@ def repo_data():
     })
 
 
-def analysis_result():
-    """What the model would have said about it."""
-    return AnalysisResult(
-        overall_trust_score=84, summary="A small FastAPI service.",
-        skills=[{"skill_name": "Python", "claimed": True, "verified": True,
-                 "level": "advanced", "confidence": 88,
-                 "reason": "Type hints throughout.",
-                 "evidence": [{"type": "source", "file": "main.py",
-                               "start_line": 1, "end_line": 2,
-                               "detail": "entry point"}]}],
-        model_name="grok-3", prompt_version="v2", raw_response="{}",
-        duration_ms=900, token_usage={"total": 700}, attempts=1,
-        rejected_citations=[],
-    )
+REPLY = json.dumps({
+    "overall_trust_score": 84,
+    "summary": "A small FastAPI service.",
+    "skills": [{
+        "skill_name": "Python", "claimed": True, "verified": True,
+        "level": "advanced", "confidence": 88,
+        "reason": "Type hints throughout.",
+        # Cites real lines of the file the fetch served, so the span validator
+        # resolves it rather than rejecting the citation.
+        "evidence": [{"type": "source", "file": "main.py", "start_line": 1,
+                      "end_line": 2, "detail": "The entry point."}],
+    }],
+})
+
+
+class StubModel:
+    """Answers with a fixed reply, so nothing reaches a model provider.
+
+    Stubbing here rather than at analyze_snapshot is deliberate: prompt
+    building, reply parsing and span validation are not network calls, and
+    skipping them is how a walk like this comes to assert on a report shape
+    the API would refuse to serve.
+    """
+
+    model_name = "grok-3"
+
+    async def complete(self, prompt):
+        return LLMResponse(text=REPLY, model="grok-3",
+                           token_usage={"prompt_tokens": 100, "completion_tokens": 20,
+                                        "total_tokens": 120})
 
 
 @pytest.fixture
@@ -76,14 +93,11 @@ def published(monkeypatch, db_session, tmp_path, signing_key):
     async def fake_fetch(owner, name, **kwargs):
         return repo_data()
 
-    async def fake_analyse(snapshot, skills_claimed, role_in_project=None, provider=None):
-        return analysis_result()
-
     async def on_the_test_database(project_id, **kwargs):
-        return await real_pipeline(project_id, session_factory=factory, log=log)
+        return await real_pipeline(project_id, session_factory=factory, log=log,
+                                   provider=StubModel())
 
     monkeypatch.setattr(analysis_service, "fetch_repository", fake_fetch)
-    monkeypatch.setattr(analysis_service, "analyze_snapshot", fake_analyse)
     monkeypatch.setattr(analysis_service, "run_pipeline", on_the_test_database)
     monkeypatch.setattr(attestation_service, "is_enabled", lambda: True)
     # Nothing in a test should wait on a Bitcoin calendar server.
@@ -127,6 +141,10 @@ def test_a_submission_becomes_a_published_report(
 
     assert report["overall_trust_score"] == 84
     assert [skill["skill_name"] for skill in report["skills"]] == ["Python"]
+    # Verified only survives if the citation resolved: _assess_skills drops the
+    # claim to unverified when the span validator rejects its evidence.
+    assert report["skills"][0]["verified"] is True
+    assert report["skills"][0]["evidence"][0]["file"] == "main.py"
     # Addressed and in the log, not merely analysed.
     assert report["attestation"]["status"] == "committed"
     assert report["attestation"]["content_hash"]
