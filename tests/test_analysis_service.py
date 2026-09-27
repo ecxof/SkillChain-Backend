@@ -1,5 +1,7 @@
 import asyncio
+import hashlib
 import os
+import subprocess
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -281,15 +283,47 @@ def test_an_enabled_log_records_the_commit_on_the_report(
     assert report.attestation_status == "committed"
     assert report.attestation_commit_sha
     assert report.attested_at is not None
-    # What was committed is what the report says it is.
+    # What was committed is what the report says it is. Existence at that path
+    # proves nothing on its own, since the path is built from content_hash;
+    # only re-hashing the bytes shows the address actually addresses them.
     committed = (enabled_log.repo_path
                  / attestation_service.report_path(report.content_hash))
     assert committed.exists()
+    assert hashlib.sha256(committed.read_bytes()).hexdigest() == report.content_hash
+
+
+def test_what_the_pipeline_signs_is_what_the_report_claims(
+        project, session_factory, pipeline, monkeypatch, tmp_path, signing_key):
+    monkeypatch.setattr(attestation_service, "is_enabled", lambda: True)
+    log = AttestationLog(tmp_path / "attestations", signing_key=signing_key)
+
+    run(project, session_factory, log=log)
+
+    report = session_factory().query(AnalysisReport).one()
+    allowed = tmp_path / "allowed_signers"
+    allowed.write_text(log.allowed_signers(), encoding="utf-8")
+
+    # A signature nobody checks is decoration. Check it the way a reader does,
+    # against the key served at /.well-known/skillchain-signing-key.
+    verified = subprocess.run(
+        ["git", "-c", f"gpg.ssh.allowedSignersFile={allowed}",
+         "verify-commit", report.attestation_commit_sha],
+        cwd=log.repo_path, capture_output=True, text=True,
+    )
+    assert verified.returncode == 0, verified.stderr
+
+    # Read the bytes out of the commit rather than the working tree. The
+    # signature covers the commit's content, so only that is evidence.
+    committed = subprocess.run(
+        ["git", "show", f"{report.attestation_commit_sha}:"
+                        f"{attestation_service.report_path(report.content_hash)}"],
+        cwd=log.repo_path, capture_output=True, check=True,
+    ).stdout
+    assert hashlib.sha256(committed).hexdigest() == report.content_hash
 
 
 def test_a_mirrored_log_is_recorded_as_mirrored(
         project, session_factory, pipeline, monkeypatch, tmp_path):
-    import subprocess
     mirror = tmp_path / "mirror.git"
     subprocess.run(["git", "init", "--bare", "--quiet", str(mirror)], check=True)
     monkeypatch.setattr(attestation_service, "is_enabled", lambda: True)

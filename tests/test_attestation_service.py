@@ -1,7 +1,6 @@
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -199,23 +198,6 @@ def test_git_failures_are_raised_as_attestation_errors(tmp_path):
 
 # --- Signatures --------------------------------------------------------------
 
-needs_ssh_keygen = pytest.mark.skipif(
-    shutil.which("ssh-keygen") is None, reason="ssh-keygen is not available"
-)
-
-
-@pytest.fixture
-def signing_key(tmp_path):
-    key = tmp_path / "attestation_key"
-    subprocess.run(
-        ["ssh-keygen", "-t", "ed25519", "-f", str(key), "-N", "", "-q",
-         "-C", att.SIGNER_IDENTITY],
-        check=True, capture_output=True,
-    )
-    return key
-
-
-@needs_ssh_keygen
 def test_a_signed_commit_verifies_against_the_published_key(tmp_path, signing_key):
     log = AttestationLog(tmp_path / "attestations", signing_key=signing_key)
     record = log.append(build_document(make_report()))
@@ -234,7 +216,6 @@ def test_a_signed_commit_verifies_against_the_published_key(tmp_path, signing_ke
     assert "Good \"git\" signature" in verified.stderr
 
 
-@needs_ssh_keygen
 def test_every_commit_in_the_log_is_signed_including_the_root(tmp_path, signing_key):
     log = AttestationLog(tmp_path / "attestations", signing_key=signing_key)
     log.append(build_document(make_report()))
@@ -251,7 +232,6 @@ def test_every_commit_in_the_log_is_signed_including_the_root(tmp_path, signing_
     assert set(statuses) == {"G"}
 
 
-@needs_ssh_keygen
 def test_allowed_signers_names_the_principal_the_commits_use(tmp_path, signing_key):
     log = AttestationLog(tmp_path / "attestations", signing_key=signing_key)
     line = log.allowed_signers()

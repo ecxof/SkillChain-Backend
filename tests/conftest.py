@@ -9,6 +9,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 # authenticated test for a reason that looks nothing like the cause.
 os.environ.setdefault("SECRET_KEY", "test-secret-key-at-least-32-bytes-long!")
 
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
 import uuid  # noqa: E402
 
 import pytest  # noqa: E402
@@ -88,3 +90,28 @@ def other_user(db_session):
     db_session.add(record)
     db_session.commit()
     return record
+
+
+@pytest.fixture
+def signing_key(tmp_path):
+    """An ed25519 key the attestation log can sign its commits with.
+
+    Shared rather than per-module because both the log's own tests and the
+    end-to-end walk need a real signature. An attestation nobody can verify
+    proves nothing, so a stubbed signer would be testing the wrong thing.
+
+    Skips rather than fails where ssh-keygen is absent: the signing is the
+    subject, not the environment that happens to be running the suite.
+    """
+    from services import attestation_service
+
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is not available")
+
+    key = tmp_path / "attestation_key"
+    subprocess.run(
+        ["ssh-keygen", "-t", "ed25519", "-f", str(key), "-N", "", "-q",
+         "-C", attestation_service.SIGNER_IDENTITY],
+        check=True, capture_output=True,
+    )
+    return key
