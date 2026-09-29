@@ -175,7 +175,7 @@ those was removed for a reason, and the reasons are what the current design rest
   — to use chain tooling. The testnet it was minted on offered no permanence either.
 - **Integrity from git and Bitcoin instead.** The one thing the blockchain was genuinely
   doing — proving a record existed unaltered at a point in time — is kept and done better.
-  See [02](02-tech-stack.md#why-git-and-bitcoin-instead-of-a-blockchain).
+  See [02](02-tech-stack.md#23-why-git-and-bitcoin-instead-of-a-blockchain).
 - **Evidence at the level of lines, not files.** A citation of a whole file is not a
   citation; the reader has to be able to open the exact lines.
 - **No AI-code detector.** The technique is unreliable on prose and worse on code, and its
