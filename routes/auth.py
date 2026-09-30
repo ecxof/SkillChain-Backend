@@ -13,6 +13,7 @@ from services.auth_service import (
     get_current_user,
     get_or_create_user_google,
     get_or_create_user_github,
+    UnverifiedEmail,
 )
 
 router = APIRouter()
@@ -64,12 +65,27 @@ async def google_callback(body: OAuthCode, db: Session = Depends(get_db)):
         )
         google_user = user_res.json()
 
-    user = get_or_create_user_google(google_user, db)
+    try:
+        user = get_or_create_user_google(google_user, db)
+    except UnverifiedEmail as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     token = create_access_token({"sub": user.id})
     return TokenOut(access_token=token)
 
 
 # ── GitHub ─────────────────────────────────────────────────────────────────────
+
+def _github_email(public_email: str | None, emails) -> tuple[str | None, bool]:
+    """The address to know this GitHub user by, and whether GitHub verified it.
+
+    The profile's public address is preferred, falling back to the primary one,
+    as before; either way its verified flag comes from the account's own list.
+    """
+    listed = [e for e in emails if isinstance(e, dict)] if isinstance(emails, list) else []
+    chosen = public_email or next((e.get("email") for e in listed if e.get("primary")), None)
+    verified = any(e.get("email") == chosen and e.get("verified") is True for e in listed)
+    return chosen, bool(chosen) and verified
+
 
 @router.get("/github/url", response_model=AuthUrlOut)
 def github_login_url():
@@ -108,17 +124,22 @@ async def github_callback(body: OAuthCode, db: Session = Depends(get_db)):
         )
         github_user = user_res.json()
 
-        # Fetch primary email if not public on profile
-        if not github_user.get("email"):
-            email_res = await client.get(
-                "https://api.github.com/user/emails",
-                headers={"Authorization": f"Bearer {access_token}"}
-            )
-            emails = email_res.json()
-            primary = next((e["email"] for e in emails if e.get("primary")), None)
-            github_user["email"] = primary
+        # Read even when the profile shows an address: whether GitHub has
+        # verified it is only reported here, and an unverified address must
+        # not be allowed to identify an account.
+        email_res = await client.get(
+            "https://api.github.com/user/emails",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        emails = email_res.json() if email_res.status_code == 200 else []
+        github_user["email"], github_user["email_verified"] = _github_email(
+            github_user.get("email"), emails
+        )
 
-    user = get_or_create_user_github(github_user, access_token, db)
+    try:
+        user = get_or_create_user_github(github_user, access_token, db)
+    except UnverifiedEmail as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     token = create_access_token({"sub": user.id})
     return TokenOut(access_token=token)
 

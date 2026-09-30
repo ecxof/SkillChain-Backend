@@ -46,14 +46,45 @@ def get_current_user(
     return user
 
 
+class UnverifiedEmail(Exception):
+    """The provider has not verified the address, so it cannot identify an account.
+
+    An unverified address is only text someone typed into a profile. Linking on
+    one would hand an existing account to whoever typed it; creating an account
+    under one would let that person wait for the real owner to sign in with a
+    provider that has verified it, and be linked into an account they control.
+    """
+
+    def __init__(self, provider: str):
+        super().__init__(
+            f"Signing in needs an email address that {provider} has verified. "
+            f"Verify one with {provider}, then sign in again."
+        )
+
+
+def _verified_email(email: str | None, verified: bool | None, provider: str) -> str:
+    """The address to match or create an account by, or UnverifiedEmail.
+
+    Only reached for a provider identity SkillChain has not seen before; a
+    returning user is found by the provider's own id and never gets here. The
+    refusal does not depend on whether an account holds the address, so it
+    tells a caller nothing about which addresses have accounts.
+    """
+    if not email or verified is not True:
+        raise UnverifiedEmail(provider)
+    return email
+
+
 def get_or_create_user_google(google_data: dict, db: Session) -> User:
     google_id = google_data["id"]
-    email = google_data["email"]
 
     # Already has Google linked
     user = db.query(User).filter(User.google_id == google_id).first()
     if user:
         return user
+
+    email = _verified_email(google_data.get("email"), google_data.get("verified_email"),
+                            "Google")
 
     # Email exists — link Google to existing account
     user = db.query(User).filter(User.email == email).first()
@@ -93,7 +124,8 @@ def get_or_create_user_github(github_data: dict, access_token: str, db: Session)
         db.refresh(user)
         return user
 
-    email = github_data.get("email") or f"{github_data['login']}@github.placeholder"
+    email = _verified_email(github_data.get("email"), github_data.get("email_verified"),
+                            "GitHub")
 
     # Email exists — link GitHub to existing account
     user = db.query(User).filter(User.email == email).first()
