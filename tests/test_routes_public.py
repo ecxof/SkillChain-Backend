@@ -202,6 +202,9 @@ def test_a_mirrored_report_says_where_the_log_can_be_cloned_from(
     assert body["mirrors"] == MIRRORS
     assert body["verify_commands"][0] == f"git clone {MIRRORS[0]} skillchain-attestations"
     assert body["commit_sha"] == "9f3c1ab"
+    # The key is fetched from this deployment's own well-known address.
+    assert any("http://testserver/.well-known/skillchain-signing-key" in command
+               for command in body["verify_commands"])
 
 
 def test_the_published_bytes_are_served_and_still_hash_to_the_stored_digest(
