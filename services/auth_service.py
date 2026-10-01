@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
+import hmac
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -11,6 +13,10 @@ import os, uuid
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 60))
+# Long enough to read a consent screen and sign in, short enough that a state
+# lifted from a log or a browser history is useless by the time it is found.
+OAUTH_STATE_MINUTES = 10
+OAUTH_STATE_PURPOSE = "oauth-state"
 
 security = HTTPBearer()
 
@@ -20,6 +26,56 @@ def create_access_token(data: dict) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+class InvalidOAuthState(Exception):
+    """The sign-in being completed is not the one this browser started."""
+
+    def __init__(self):
+        super().__init__("This sign-in has expired or was not started from this browser. "
+                         "Start signing in again.")
+
+
+def _nonce_hash(nonce: str) -> str:
+    return hashlib.sha256(nonce.encode("utf-8")).hexdigest()
+
+
+def issue_oauth_state(provider: str, nonce: str) -> str:
+    """The OAuth ``state`` value for a sign-in this browser is starting.
+
+    Signed and short-lived, so it cannot be forged or kept for later. Signing
+    alone would not stop login CSRF, though: an attacker could ask for a state
+    of their own and plant it, with their own code, in a link for the victim to
+    follow. So the state also carries the hash of a nonce that only the browser
+    which started the sign-in holds, and the callback must present that nonce.
+    The hash rather than the nonce goes into the state, because the state passes
+    through the provider and lands in URLs and logs.
+    """
+    claims = {
+        "purpose": OAUTH_STATE_PURPOSE,
+        "provider": provider,
+        "nonce_hash": _nonce_hash(nonce),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=OAUTH_STATE_MINUTES),
+    }
+    return jwt.encode(claims, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def check_oauth_state(state: str, provider: str, nonce: str) -> None:
+    """Accept a callback only for a sign-in this browser started, recently.
+
+    Raises :class:`InvalidOAuthState` for a forged, expired or tampered state,
+    one issued for the other provider, a session token passed off as a state,
+    or a nonce that is not the one the state was issued for.
+    """
+    try:
+        claims = jwt.decode(state, SECRET_KEY, algorithms=[ALGORITHM],
+                            options={"require": ["exp"]})
+    except jwt.PyJWTError as exc:
+        raise InvalidOAuthState() from exc
+    if (claims.get("purpose") != OAUTH_STATE_PURPOSE
+            or claims.get("provider") != provider
+            or not hmac.compare_digest(str(claims.get("nonce_hash", "")), _nonce_hash(nonce))):
+        raise InvalidOAuthState()
 
 
 def get_current_user(
