@@ -13,7 +13,7 @@ answer, so the API never confirms that a private project exists.
 import base64
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from db.database import get_db
@@ -135,7 +135,7 @@ def _mirrors_for(report: AnalysisReport, log) -> list[str]:
 
 
 @router.get("/reports/{report_id}/attestation", response_model=AttestationOut)
-def report_attestation(report_id: str, db: Session = Depends(get_db)):
+def report_attestation(report_id: str, request: Request, db: Session = Depends(get_db)):
     """Everything needed to verify this report without trusting SkillChain.
 
     The canonical bytes, their hash, the signed commit that carries them, the
@@ -160,7 +160,9 @@ def report_attestation(report_id: str, db: Session = Depends(get_db)):
                 signed=True,
                 attested_at=report.attested_at,
                 mirrors=mirrors,
-            )
+            ),
+            # The key's address on this deployment, as the caller reached it.
+            key_url=str(request.url_for("signing_key")),
         )
 
     return AttestationOut(

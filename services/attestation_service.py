@@ -414,11 +414,28 @@ def attest(report, *, log: AttestationLog | None = None) -> AttestationRecord:
     return record
 
 
-def verify_commands(record: AttestationRecord, mirror: str | None = None) -> list[str]:
-    """Copy-pasteable commands proving the report, for the attestation endpoint."""
+SIGNING_KEY_PATH = "/.well-known/skillchain-signing-key"
+
+
+def verify_commands(record: AttestationRecord, mirror: str | None = None,
+                    key_url: str | None = None) -> list[str]:
+    """Shell commands that prove the report, for the attestation endpoint.
+
+    git will not check an SSH signature until it is told which keys to trust,
+    and a verifier's machine has no such setting, so the published key is
+    fetched and handed to git explicitly. Without that step the signature
+    check fails on every machine but ours.
+
+    One command per line, with no ``&&``, so they run as written in bash, zsh
+    and Git Bash. The hash is taken from the commit object rather than the
+    checked-out file, because the signature covers the commit's content.
+    """
     source = mirror or (record.mirrors[0] if record.mirrors else "<attestation-repo-url>")
+    key = key_url or f"<skillchain-api-url>{SIGNING_KEY_PATH}"
     return [
         f"git clone {source} skillchain-attestations",
-        f"cd skillchain-attestations && git verify-commit {record.commit_sha}",
-        f"sha256sum {record.path}  # expect {record.content_hash}",
+        "cd skillchain-attestations",
+        f"curl -fsSL {key} -o allowed_signers",
+        f"git -c gpg.ssh.allowedSignersFile=allowed_signers verify-commit {record.commit_sha}",
+        f"git show {record.commit_sha}:{record.path} | sha256sum  # expect {record.content_hash}",
     ]

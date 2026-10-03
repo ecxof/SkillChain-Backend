@@ -4,10 +4,19 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+# The frontend makes the nonce from a secure random source and keeps it for the
+# length of one sign-in; it is what ties the provider's redirect back to the
+# browser that started it.
+NONCE_LENGTH = {"min_length": 16, "max_length": 128}
+
+
 class OAuthCode(BaseModel):
-    """The authorization code the frontend received from Google or GitHub."""
+    """What the frontend sends back once the provider redirects to it."""
 
     code: str = Field(min_length=1, max_length=512)
+    # The state the provider echoed back, and the nonce this browser kept.
+    state: str = Field(min_length=1, max_length=2048)
+    nonce: str = Field(**NONCE_LENGTH)
 
 
 class AuthUrlOut(BaseModel):

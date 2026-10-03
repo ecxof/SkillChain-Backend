@@ -2,7 +2,9 @@ import hashlib
 import json
 import os
 import subprocess
+import shutil
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -309,10 +311,69 @@ def test_from_env_reads_the_mirror_list(monkeypatch, tmp_path, signing_key):
     assert from_env().remotes == ["https://a.example/log.git", "https://b.example/log.git"]
 
 
-def test_verify_commands_reference_a_mirror_and_the_expected_hash(log):
+def test_verify_commands_reference_a_mirror_the_key_and_the_expected_hash(log):
     record = log.append(build_document(make_report()))
     record.mirrors = ["https://github.com/ecxof/skillchain-attestations.git"]
-    commands = verify_commands(record)
-    assert "git clone https://github.com/ecxof/skillchain-attestations.git" in commands[0]
-    assert f"git verify-commit {record.commit_sha}" in commands[1]
-    assert record.content_hash in commands[2]
+    commands = verify_commands(record, key_url="https://api.example/.well-known/skillchain-signing-key")
+    assert commands[0] == "git clone https://github.com/ecxof/skillchain-attestations.git skillchain-attestations"
+    assert "https://api.example/.well-known/skillchain-signing-key" in commands[2]
+    assert f"gpg.ssh.allowedSignersFile=allowed_signers verify-commit {record.commit_sha}" in commands[3]
+    assert record.content_hash in commands[4]
+
+
+def test_verify_commands_never_chain_with_double_ampersand(log):
+    record = log.append(build_document(make_report()))
+    # Windows PowerShell 5.1 cannot parse &&; one command per line runs anywhere.
+    assert not any("&&" in command for command in verify_commands(record))
+
+
+needs_a_posix_shell = pytest.mark.skipif(
+    not all(shutil.which(tool) for tool in ("bash", "curl", "sha256sum")),
+    reason="running the served commands needs bash, curl and sha256sum",
+)
+
+
+def run_as_served(commands, workdir):
+    """Run the commands exactly as served, in order, stopping at the first failure."""
+    script = "set -eo pipefail\n" + "\n".join(commands) + "\n"
+    return subprocess.run(["bash", "-c", script], cwd=workdir, capture_output=True, text=True)
+
+
+def published(tmp_path, signing_key, key_text):
+    """A signed log mirrored at a path, and a key file served at a file:// URL."""
+    log = AttestationLog(tmp_path / "attestations", signing_key=signing_key)
+    record = log.append(build_document(make_report()))
+    record.mirrors = [log.repo_path.as_posix()]
+    key_file = tmp_path / "served-key"
+    key_file.write_text(key_text(log), encoding="utf-8")
+    workdir = tmp_path / "verifier"
+    workdir.mkdir()
+    return record, key_file.as_uri(), workdir
+
+
+@needs_a_posix_shell
+def test_the_served_commands_prove_the_report_when_run_as_written(tmp_path, signing_key):
+    record, key_url, workdir = published(tmp_path, signing_key, lambda log: log.allowed_signers())
+
+    result = run_as_served(verify_commands(record, key_url=key_url), workdir)
+
+    # Not a comparison of strings: these are the commands a verifier would
+    # paste, run on a machine with no git signing configuration of its own.
+    assert result.returncode == 0, result.stderr
+    assert 'Good "git" signature' in result.stderr
+    assert result.stdout.split()[0] == record.content_hash
+
+
+@needs_a_posix_shell
+def test_the_served_commands_fail_against_any_other_key(tmp_path, signing_key):
+    impostor = tmp_path / "impostor"
+    subprocess.run(["ssh-keygen", "-t", "ed25519", "-f", str(impostor), "-N", "", "-q",
+                    "-C", att.SIGNER_IDENTITY], check=True, capture_output=True)
+    other_key = Path(str(impostor) + ".pub").read_text(encoding="utf-8").strip()
+    record, key_url, workdir = published(
+        tmp_path, signing_key, lambda log: f"{att.SIGNER_IDENTITY} {other_key}\n")
+
+    result = run_as_served(verify_commands(record, key_url=key_url), workdir)
+
+    # A check that passes whatever key it is given checks nothing.
+    assert result.returncode != 0

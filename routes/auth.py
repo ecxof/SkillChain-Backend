@@ -1,18 +1,22 @@
 import os
 import httpx
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from db.database import get_db
 from models.user import User
-from schemas.auth import AuthUrlOut, OAuthCode, TokenOut, UserOut
+from schemas.auth import NONCE_LENGTH, AuthUrlOut, OAuthCode, TokenOut, UserOut
 from schemas.profiles import ProfileSettingsUpdate
 from services.auth_service import (
     create_access_token,
     get_current_user,
     get_or_create_user_google,
     get_or_create_user_github,
+    InvalidOAuthState,
+    UnverifiedEmail,
+    check_oauth_state,
+    issue_oauth_state,
 )
 
 router = APIRouter()
@@ -25,11 +29,23 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 
+def _check_state(body: OAuthCode, provider: str) -> None:
+    """Refuse a callback this browser did not start, before the code is spent."""
+    try:
+        check_oauth_state(body.state, provider, body.nonce)
+    except InvalidOAuthState as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
 # ── Google ─────────────────────────────────────────────────────────────────────
 
 @router.get("/google/url", response_model=AuthUrlOut)
-def google_login_url():
-    """Step 1: Frontend opens this URL to start Google login."""
+def google_login_url(nonce: str = Query(**NONCE_LENGTH)):
+    """Step 1: Frontend opens this URL to start Google login.
+
+    ``nonce`` is a random value the frontend keeps until the callback; the
+    returned URL carries a signed state bound to it.
+    """
     url = (
         "https://accounts.google.com/o/oauth2/v2/auth"
         f"?client_id={GOOGLE_CLIENT_ID}"
@@ -37,12 +53,14 @@ def google_login_url():
         "&scope=openid email profile"
         f"&redirect_uri={FRONTEND_URL}/auth/google/callback"
         "&access_type=offline"
+        f"&state={issue_oauth_state('google', nonce)}"
     )
     return AuthUrlOut(url=url)
 
 @router.post("/google/callback", response_model=TokenOut)
 async def google_callback(body: OAuthCode, db: Session = Depends(get_db)):
     """Step 2: Frontend sends the code it received from Google."""
+    _check_state(body, "google")
     async with httpx.AsyncClient() as client:
         token_res = await client.post(
             "https://oauth2.googleapis.com/token",
@@ -64,27 +82,48 @@ async def google_callback(body: OAuthCode, db: Session = Depends(get_db)):
         )
         google_user = user_res.json()
 
-    user = get_or_create_user_google(google_user, db)
+    try:
+        user = get_or_create_user_google(google_user, db)
+    except UnverifiedEmail as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     token = create_access_token({"sub": user.id})
     return TokenOut(access_token=token)
 
 
 # ── GitHub ─────────────────────────────────────────────────────────────────────
 
+def _github_email(public_email: str | None, emails) -> tuple[str | None, bool]:
+    """The address to know this GitHub user by, and whether GitHub verified it.
+
+    The profile's public address is preferred, falling back to the primary one,
+    as before; either way its verified flag comes from the account's own list.
+    """
+    listed = [e for e in emails if isinstance(e, dict)] if isinstance(emails, list) else []
+    chosen = public_email or next((e.get("email") for e in listed if e.get("primary")), None)
+    verified = any(e.get("email") == chosen and e.get("verified") is True for e in listed)
+    return chosen, bool(chosen) and verified
+
+
 @router.get("/github/url", response_model=AuthUrlOut)
-def github_login_url():
-    """Step 1: Frontend opens this URL to start GitHub login."""
+def github_login_url(nonce: str = Query(**NONCE_LENGTH)):
+    """Step 1: Frontend opens this URL to start GitHub login.
+
+    ``nonce`` is a random value the frontend keeps until the callback; the
+    returned URL carries a signed state bound to it.
+    """
     url = (
         "https://github.com/login/oauth/authorize"
         f"?client_id={GITHUB_CLIENT_ID}"
         "&scope=read:user user:email"
         f"&redirect_uri={FRONTEND_URL}/auth/github/callback"
+        f"&state={issue_oauth_state('github', nonce)}"
     )
     return AuthUrlOut(url=url)
 
 @router.post("/github/callback", response_model=TokenOut)
 async def github_callback(body: OAuthCode, db: Session = Depends(get_db)):
     """Step 2: Frontend sends the code it received from GitHub."""
+    _check_state(body, "github")
     async with httpx.AsyncClient() as client:
         token_res = await client.post(
             "https://github.com/login/oauth/access_token",
@@ -108,17 +147,22 @@ async def github_callback(body: OAuthCode, db: Session = Depends(get_db)):
         )
         github_user = user_res.json()
 
-        # Fetch primary email if not public on profile
-        if not github_user.get("email"):
-            email_res = await client.get(
-                "https://api.github.com/user/emails",
-                headers={"Authorization": f"Bearer {access_token}"}
-            )
-            emails = email_res.json()
-            primary = next((e["email"] for e in emails if e.get("primary")), None)
-            github_user["email"] = primary
+        # Read even when the profile shows an address: whether GitHub has
+        # verified it is only reported here, and an unverified address must
+        # not be allowed to identify an account.
+        email_res = await client.get(
+            "https://api.github.com/user/emails",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        emails = email_res.json() if email_res.status_code == 200 else []
+        github_user["email"], github_user["email_verified"] = _github_email(
+            github_user.get("email"), emails
+        )
 
-    user = get_or_create_user_github(github_user, access_token, db)
+    try:
+        user = get_or_create_user_github(github_user, access_token, db)
+    except UnverifiedEmail as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     token = create_access_token({"sub": user.id})
     return TokenOut(access_token=token)
 

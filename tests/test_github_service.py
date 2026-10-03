@@ -253,16 +253,20 @@ def test_missing_repository_without_a_token_may_be_private(github):
         fetch()
     assert exc.value.may_be_private is True
     assert "octocat/Hello-World" in str(exc.value)
-    assert "Link your GitHub account" in str(exc.value)
+    assert "only analyse public repositories" in str(exc.value)
+    # Linking GitHub does not reach private repositories, so it is not offered.
+    assert "Link your GitHub account" not in str(exc.value)
 
 
-def test_missing_repository_with_a_token_is_simply_missing(github):
+def test_a_linked_token_still_cannot_see_a_private_repository(github):
     github["meta"].respond(404, json={"message": "Not Found"})
 
     with pytest.raises(RepositoryNotFound) as exc:
         fetch(token="gho_secret")
     assert exc.value.may_be_private is False
-    assert "private" not in str(exc.value)
+    # The token's scope grants no repository contents, so a 404 here can still
+    # be a private repository, and the message has to say so.
+    assert "only analyse public repositories" in str(exc.value)
 
 
 def test_exhausted_rate_limit_reports_when_it_resets(github):
