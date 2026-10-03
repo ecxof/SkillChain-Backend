@@ -66,16 +66,19 @@ class GitHubError(Exception):
 class RepositoryNotFound(GitHubError):
     """GitHub answered 404.
 
-    Without credentials GitHub answers 404 for private repositories as well,
-    so it cannot say whether the repository is missing or merely invisible;
-    ``may_be_private`` is True in that case.
+    GitHub answers 404 for a private repository the caller cannot see, so it
+    cannot say whether the repository is missing or merely invisible;
+    ``may_be_private`` is True when no credentials were used.
+
+    The message says the same in both modes. A linked token is requested with
+    ``read:user user:email``, which grants no repository contents, so it cannot
+    see a private repository either, and telling the submitter to link GitHub
+    would send them after a fix that does not work.
     """
 
     def __init__(self, repo: str, *, may_be_private: bool):
-        message = f"GitHub has no repository at {repo}"
-        if may_be_private:
-            message += (", or it is private. Link your GitHub account to analyse"
-                        " private repositories")
+        message = (f"GitHub has no public repository at {repo}. If it is private:"
+                   " SkillChain can only analyse public repositories for now")
         super().__init__(message, status_code=404)
         self.repo = repo
         self.may_be_private = may_be_private

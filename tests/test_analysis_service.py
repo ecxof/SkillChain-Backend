@@ -219,8 +219,9 @@ def test_a_missing_repository_fails_with_the_message_github_gave(
 
     stored = session_factory().get(Project, project)
     assert stored.status == "failed"
-    # The submitter reads this, so it has to say something actionable.
-    assert "Link your GitHub account" in stored.error_message
+    # The submitter reads this, so it has to be true as well as actionable.
+    assert "only analyse public repositories" in stored.error_message
+    assert "Link your GitHub account" not in stored.error_message
 
 
 def test_a_rate_limit_fails_the_run_without_a_snapshot(project, session_factory, pipeline):
